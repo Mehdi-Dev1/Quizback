@@ -3,6 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const mysql = require('mysql2');
 require ('dotenv').config();
+const jwt = require('jsonwebtoken');
+const secretKey = process.env.JWT_SECRET_KEY;
 
 const db = mysql.createConnection({
     host: process.env.DB_HOST,
@@ -12,18 +14,25 @@ const db = mysql.createConnection({
 })
 
 
-router.post('/register', async (req, res) =>{
-    const {username, password, name, firstname} = req.body;
+router.post('/register', async (req, res) => {
+    const { username, password, name, firstname } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const sql = 'INSERT INTO users (username, password, name ,firstname) VALUE (?,?,?,?)';
-    db.query (sql, [username,hashedPassword,name,firstname], (err, results) => { 
-        if (err){
-            return res.status(500).send(err);
+    db.query(sql, [username, hashedPassword, name, firstname], (err, results) => {
+        if (err) {
+            return res.status(500).json({ message: 'Database error' });
         }
-      res.status(201).send({message:'Utilisateur créé'});
-    })
-})
+
+        const token = jwt.sign(
+            { username: username }, // Payload
+            secretKey, // Clé secrète
+            { expiresIn: '1h' } // Options
+        );
+
+        res.status(201).json({ message: 'Utilisateur créé', token: token });
+    });
+});
 
 router.get('/', (req, res) => {
     const sql = 'SELECT * FROM users';
@@ -35,37 +44,39 @@ router.get('/', (req, res) => {
     });
 })
 
-router.post('/auth', async function(request, response) {
-    const { username, password } = request.body;
+router.post('/auth', async (req, res) => {
+    const { username, password } = req.body;
+    const sql = 'SELECT * FROM users WHERE username = ?';
 
-    if (!username || !password) {
-        return response.status(400).json({ message: 'Besoin user+mdp' });
-    }
+    db.query(sql, [username], async (err, results) => {
+        if (err) {
+            // Gestion des erreurs de la requête SQL
+            return res.status(500).json({ message: 'Database error' });
+        }
 
-    try {
-        
-        const sql = 'SELECT * FROM users WHERE username = ?';
-        db.query(sql, [username], async (err, results) => {
-            if (err) {
-                return response.status(500);
-            }
+        const user = results[0];
 
-    
-            const passwordMatch = await bcrypt.compare(password, user.password);
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            // Authentification échouée
+            return res.status(401).json({ message: 'Mauvais identifiant !' });
+        }
 
-            // Si le mot de passe ne correspond pas
-            if (!passwordMatch) {
-                return response.status(401).json({ message: 'mauvais mdp' });
-            }
+        const token = jwt.sign(
+            { id: user.id, username: user.username }, // Payload
+            secretKey, // Clé secrète
+            { expiresIn: '1h' } // Options
+        );
 
-            // Si l'authentification réussit
-            return response.status(200).json({ message: 'Connexion établie', user: { username: user.username, name: user.name, firstname: user.firstname } });
-        });
-
-    } catch (error) {
-        return response.status(500);
-    }
+        // Authentification réussie
+        res.json({ message: `Bienvenue, ${user.username}!`, 
+            token: token, 
+            name: user.name,
+            firstname: user.firstname,
+            role: user.role});
+    });
 });
+
+
 
 
 
